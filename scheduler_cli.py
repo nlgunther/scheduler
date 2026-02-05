@@ -49,7 +49,6 @@ class CLI:
             print(f"Unknown command: {handler_name}")
 
     def _split_args(self, cmd_str: str) -> List[str]:
-        # Simple split respecting quotes
         import shlex
         return shlex.split(cmd_str)
 
@@ -100,10 +99,8 @@ def cmd_show(cli: CLI, args: List[str]):
     project = cli.storage.load_project(slug)
     if not project: return print(f"Project '{slug}' not found.")
 
-    # Mode 1: Show specific task details
     if len(args) > 1:
         task_id = args[1]
-        # Fuzzy match task ID
         task = next((t for t in project.tasks if t.id.startswith(task_id)), None)
         if not task: return print(f"Task '{task_id}' not found in project '{slug}'.")
         
@@ -114,19 +111,15 @@ def cmd_show(cli: CLI, args: List[str]):
         print(f"Assignee: {task.assignee or 'None'}")
         print(f"Due:      {task.due_date or 'None'}")
         print(f"Tags:     {', '.join(task.tags)}")
-        
         if task.contact_id:
-            # Resolve contact name
             c_name = next((c.name for c in project.contacts if c.id == task.contact_id), "Unknown")
             print(f"Contact:  {c_name}")
-            
         print("-" * 40)
         print(f"📝 Notes:\n{task.notes or '(No notes)'}")
         print("-" * 40)
         print(f"🏁 Outcome:\n{task.outcome or '(No outcome)'}")
         return
 
-    # Mode 2: Show Project Summary (Original behavior)
     print(f"\nProject: {project.name} ({project.slug})")
     print("="*40)
     print(project.description or "(No description)")
@@ -134,7 +127,8 @@ def cmd_show(cli: CLI, args: List[str]):
     if project.contacts:
         print("\nContacts:")
         for c in project.contacts:
-            print(f"  * {c.name} ({c.role or 'No role'}) - {c.phone or 'No phone'}")
+            note = f" -- {c.notes}" if c.notes else ""
+            print(f"  * {c.name} ({c.role or 'No role'}) - {c.phone or 'No phone'}{note}")
             
     print("\nTasks:")
     for t in project.tasks:
@@ -142,7 +136,6 @@ def cmd_show(cli: CLI, args: List[str]):
             print(f"  {t.status.icon} {t.title} ({t.id})")
 
 def cmd_new_project(cli: CLI, args: List[str]):
-    # Usage: new project <slug> <name>
     if len(args) < 3 or args[0] != "project":
         return print("Usage: new project <slug> <name>")
     try:
@@ -152,10 +145,10 @@ def cmd_new_project(cli: CLI, args: List[str]):
         print(f"Error: {e}")
 
 def cmd_add_task(cli: CLI, args: List[str]):
-    # Usage: add task <slug> <title> [options]
-    if len(args) < 3 or args[0] != "task":
+    if len(args) < 3:
         return print("Usage: add task <slug> <title>")
     
+    # args[0] is 'task' (checked by router), so args[1] is slug, args[2] is title
     slug, title = args[1], args[2]
     pos, opts = cli._parse_options(args[3:])
     
@@ -172,15 +165,22 @@ def cmd_add_task(cli: CLI, args: List[str]):
         print(f"Error: {e}")
 
 def cmd_add_contact(cli: CLI, args: List[str]):
-    if len(args) < 3 or args[0] != "contact": return print("Usage: add contact <slug> <name>")
+    if len(args) < 3: return print("Usage: add contact <slug> <name> [options]")
     slug, name = args[1], args[2]
-    pos, opts = cli._parse_options(args[3:])
+    _, opts = cli._parse_options(args[3:])
     
     try:
-        c = cli.service.add_contact(slug, name, opts.get("phone"), opts.get("role"), opts.get("email"))
+        c = cli.service.add_contact(slug, name, opts.get("phone"), opts.get("role"), opts.get("email"), opts.get("note"))
         print(f"Added contact: {c.name}")
     except ValueError as e:
         print(f"Error: {e}")
+
+def cmd_add_router(cli: CLI, args: List[str]):
+    if not args: return print("Usage: add <task|contact> <slug> ...")
+    sub = args[0].lower()
+    if sub == "task": cmd_add_task(cli, args)
+    elif sub == "contact": cmd_add_contact(cli, args)
+    else: print(f"Unknown command: '{sub}'")
 
 def cmd_rename(cli: CLI, args: List[str]):
     if len(args) < 2: return print("Usage: rename <old> <new>")
@@ -190,17 +190,11 @@ def cmd_rename(cli: CLI, args: List[str]):
     except ValueError as e:
         print(f"Error: {e}")
 
-def cmd_help(cli: CLI, args: List[str]):
-    print("Commands: list, show, new project, add task, add contact, rename, help, quit")
-
-
 def cmd_export(cli: CLI, args: List[str]):
-    # export <slug> [json|csv]
     if len(args) < 1: return print("Usage: export <slug> [json|csv]")
     slug = args[0]
     fmt = args[1] if len(args) > 1 else "json"
     
-    # We need to instantiate the service locally since it wasn't in the main CLI init
     from scheduler_services import ImportExportService
     svc = ImportExportService(cli.storage)
     
@@ -212,45 +206,47 @@ def cmd_export(cli: CLI, args: List[str]):
     except ValueError as e:
         print(f"Error: {e}")
 
-# Add to command registry
+def cmd_edit(cli: CLI, args: List[str]):
+    if not args: return print("Usage: edit <slug> [task_id] [options]")
+    slug = args[0]
+    is_task_edit = len(args) > 1 and not args[1].startswith("-")
+    
+    if is_task_edit:
+        task_id = args[1]
+        _, opts = cli._parse_options(args[2:])
+        updates = {}
+        if "due" in opts or "d" in opts: updates["due_date"] = opts.get("due") or opts.get("d")
+        if "title" in opts or "t" in opts: updates["title"] = opts.get("title") or opts.get("t")
+        if "assignee" in opts or "a" in opts: updates["assignee"] = opts.get("assignee") or opts.get("a")
+            
+        if not updates: return print("No task changes specified.")
+        try:
+            t = cli.service.update_task(slug, task_id, **updates)
+            print(f"Updated task: {t.title} ({t.id})")
+        except ValueError as e:
+            print(f"Error: {e}")
+    else:
+        _, opts = cli._parse_options(args[1:])
+        name = opts.get("name") or opts.get("n")
+        desc = opts.get("desc") or opts.get("description") or opts.get("note")
+        
+        if not name and not desc: return print("No project changes specified.")
+        try:
+            p = cli.service.update_project(slug, name, desc)
+            print(f"Updated Project: {p.name}")
+        except ValueError as e:
+            print(f"Error: {e}")
 
+def cmd_help(cli: CLI, args: List[str]):
+    print("Commands: list, show, new project, add task, add contact, rename, edit, export, help, quit")
 
 _COMMANDS = {
     "list": cmd_list,
     "show": cmd_show,
     "new": cmd_new_project,
-    "add": cmd_add_task,
+    "add": cmd_add_router,
     "rename": cmd_rename,
+    "edit": cmd_edit,
+    "export": cmd_export,
     "help": cmd_help
 }
-
-
-# Late registration of extra commands
-_COMMANDS["export"] = cmd_export
-
-
-def cmd_edit(cli: CLI, args: List[str]):
-    # Usage: edit <slug> <task_id> [options]
-    if len(args) < 2: return print("Usage: edit <slug> <task_id> [options]")
-    slug, task_id = args[0], args[1]
-    _, opts = cli._parse_options(args[2:])
-    
-    updates = {}
-    if "due" in opts or "d" in opts: 
-        updates["due_date"] = opts.get("due") or opts.get("d")
-    if "title" in opts or "t" in opts: 
-        updates["title"] = opts.get("title") or opts.get("t")
-    if "assignee" in opts or "a" in opts: 
-        updates["assignee"] = opts.get("assignee") or opts.get("a")
-        
-    if not updates:
-        return print("No changes specified. Use -d (due), -t (title), or -a (assignee).")
-        
-    try:
-        t = cli.service.update_task(slug, task_id, **updates)
-        print(f"Updated task: {t.title} ({t.id})")
-        if t.due_date: print(f"  New Due Date: {t.due_date}")
-    except ValueError as e:
-        print(f"Error: {e}")
-
-_COMMANDS["edit"] = cmd_edit
