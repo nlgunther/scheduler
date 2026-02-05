@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-scheduler"
+version = "0.2.1"
+description = "A hybrid SQLite/JSON task scheduler for agents and power users."
+authors = [
+  { name = "Nick Gunther", email = "nick@example.com" },
+]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+schd = "scheduler:main"
+scheduler = "scheduler:main"
+
+# --- THE FIX IS HERE ---
+# We list the specific files instead of asking it to find a folder
+[tool.setuptools]
+py-modules = [
+    "scheduler",
+    "scheduler_cli",
+    "scheduler_config",
+    "scheduler_models",
+    "scheduler_services",
+    "scheduler_storage"
+]
