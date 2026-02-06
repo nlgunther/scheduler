@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-scheduler"
-version = "0.2.1"
-description = "A hybrid SQLite/JSON task scheduler for agents and power users."
+version = "2.0.0"
+description = "A hybrid SQLite/JSON task scheduler."
 authors = [
   { name = "Nick Gunther", email = "nick@example.com" },
 ]
@@ -13,27 +13,13 @@ readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
 ]
 dependencies = []
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-]
-
 [project.scripts]
-schd = "scheduler:main"
-scheduler = "scheduler:main"
+# Point 'schd' to the NEW package entry point
+schd = "scheduler.cli:main"
 
-# --- THE FIX IS HERE ---
-# We list the specific files instead of asking it to find a folder
 [tool.setuptools]
-py-modules = [
-    "scheduler",
-    "scheduler_cli",
-    "scheduler_config",
-    "scheduler_models",
-    "scheduler_services",
-    "scheduler_storage"
-]
+package-dir = {"" = "src"}
+packages = ["scheduler", "scheduler.services", "scheduler.storage"]
