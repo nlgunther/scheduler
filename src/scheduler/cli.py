@@ -316,7 +316,15 @@ def cmd_maintenance(cli, args):
         print("Database optimized.")
 
 def cmd_export(cli, args):
-    if len(args) < 2: return print("Usage: export <slug> [ics|json|csv] [task_id]")
+    """Export project data in various formats."""
+    if len(args) < 2: 
+        return print("Usage: export <slug> [ics|json|csv|to_manifest] [task_id]\n"
+                    "       export to_manifest <slug> <file>")
+    
+    # Handle manifest export format
+    if args[0] == "to_manifest":
+        return cmd_export_manifest(cli, args)
+    
     slug, fmt = args[0], args[1]
     
     if fmt == "ics":
@@ -331,11 +339,155 @@ def cmd_export(cli, args):
         Path(fname).write_text(content, encoding="utf-8")
         print(f"Exported to {fname}")
 
+def cmd_import_manifest(cli, args):
+    """Import tasks from Manifest Manager CSV export.
+    
+    Usage: import from_manifest <csv_file> --project <slug>
+    """
+    try:
+        from shared.integration import SchemaMapper, DataFrameBridge
+        import pandas as pd
+    except ImportError:
+        return print("Error: Manifest integration requires 'shared' module and pandas.\n"
+                    "Install: pip install pandas\n"
+                    "Setup shared module - see SHARED_MODULE_INTEGRATION_PLAN.md")
+    
+    pos, opts = cli._opts(args)
+    if len(pos) < 2 or pos[0] != "from_manifest":
+        return print("Usage: import from_manifest <file> --project <slug>")
+    
+    csv_file = pos[1]
+    project_slug = opts.get("project") or opts.get("p")
+    
+    if not project_slug:
+        return print("Error: --project <slug> required\n"
+                    "Example: import from_manifest tasks.csv --project planning")
+    
+    # Check file exists
+    if not Path(csv_file).exists():
+        return print(f"Error: File not found: {csv_file}")
+    
+    # Load project
+    project = cli.storage.load_project(project_slug)
+    if not project:
+        return print(f"Error: Project '{project_slug}' not found\n"
+                    f"Create it first: new project {project_slug} \"Project Name\"")
+    
+    # Read and validate CSV
+    try:
+        df_manifest = pd.read_csv(csv_file)
+    except Exception as e:
+        return print(f"Error reading CSV: {e}")
+    
+    # Validate
+    is_valid, issues = DataFrameBridge.validate_import(
+        df_manifest,
+        required_columns=['source_id', 'title']
+    )
+    if not is_valid:
+        print("Validation errors:")
+        for issue in issues:
+            print(f"  • {issue}")
+        return
+    
+    # Transform to scheduler format
+    df_scheduler = SchemaMapper.manifest_to_scheduler(df_manifest)
+    
+    # Import tasks
+    count = 0
+    for _, row in df_scheduler.iterrows():
+        title = row.get('title', 'Untitled')
+        due_date = row.get('due_date')
+        notes = row.get('notes', '')
+        source_id = row.get('source_id')
+        status = row.get('status', 'todo')
+        
+        # Store source_id in tags for round-trip
+        tags = [f"manifest_id:{source_id}"] if pd.notna(source_id) else []
+        
+        try:
+            cli.task_service.add_task(
+                project_slug,
+                title,
+                due=due_date if pd.notna(due_date) else None,
+                notes=notes if pd.notna(notes) else None,
+                tags=tags
+            )
+            count += 1
+        except Exception as e:
+            print(f"Warning: Failed to import task '{title}': {e}")
+    
+    print(f"✓ Imported {count} tasks from manifest into project '{project.name}'")
+
+def cmd_export_manifest(cli, args):
+    """Export project to Manifest Manager format.
+    
+    Usage: export to_manifest <project_slug> <output_file>
+    """
+    try:
+        from shared.integration import SchemaMapper, DataFrameBridge
+        import pandas as pd
+    except ImportError:
+        return print("Error: Manifest integration requires 'shared' module and pandas.\n"
+                    "Install: pip install pandas\n"
+                    "Setup shared module - see SHARED_MODULE_INTEGRATION_PLAN.md")
+    
+    if len(args) < 3:
+        return print("Usage: export to_manifest <project_slug> <file>")
+    
+    project_slug = args[1]
+    output_file = args[2]
+    
+    # Load project
+    project = cli.storage.load_project(project_slug)
+    if not project:
+        return print(f"Error: Project '{project_slug}' not found")
+    
+    # Convert tasks to DataFrame
+    rows = []
+    for task in project.tasks:
+        # Extract manifest_id from tags if present
+        manifest_id = None
+        if hasattr(task, 'tags') and task.tags:
+            for tag in task.tags:
+                if tag.startswith("manifest_id:"):
+                    manifest_id = tag.split(":", 1)[1]
+                    break
+        
+        rows.append({
+            'source_id': manifest_id or task.id,
+            'title': task.title,
+            'assignee': getattr(task, 'assignee', None),
+            'status': task.status.value,
+            'due_date': task.due_date,
+            'priority': getattr(task, 'priority', None),
+            'notes': task.notes,
+        })
+    
+    df_scheduler = pd.DataFrame(rows)
+    
+    # Transform to manifest format
+    df_manifest = SchemaMapper.scheduler_to_manifest(df_scheduler)
+    
+    # Add metadata for tracking
+    df_manifest = DataFrameBridge.add_metadata(df_manifest, source='scheduler')
+    
+    # Save
+    df_manifest.to_csv(output_file, index=False)
+    
+    print(f"✓ Exported {len(rows)} tasks to {output_file}")
+    print(f"\nTo import into manifest:")
+    print(f"  manifest")
+    print(f"  (manifest) load your_file.xml")
+    print(f"  (your_file.xml) import_scheduler {output_file}")
+    print(f"  (your_file.xml) save")
+
 _COMMANDS = {
     "list": cmd_list, "show": cmd_show, "new": cmd_new, "add": cmd_add, 
     "edit": cmd_edit, "delete": cmd_delete,
     "backup": cmd_backup, "restore": cmd_restore, "maintenance": cmd_maintenance, 
     "export": cmd_export, "config": cmd_config,
+    "import": cmd_import_manifest,
     "help": lambda c, a: print(_GENERAL_HELP if not a else _HELP.get(a[0], f"No help for '{a[0]}'"))
 }
 
