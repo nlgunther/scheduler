@@ -95,6 +95,7 @@ coverage.xml
 *.md
 *.npz
 *.html
+*.ics
 
 # Django stuff:
 *.log

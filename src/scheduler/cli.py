@@ -37,9 +37,22 @@ class CLI:
     def _execute(self, cmd_str):
         parts = shlex.split(cmd_str)
         if not parts: return
-        handler = _COMMANDS.get(parts[0].lower())
-        if handler: handler(self, parts[1:])
-        else: print(f"Unknown command: {parts[0]}")
+        
+        cmd_name = parts[0].lower()
+        args = parts[1:]
+        
+        # Handle --help flag for any command
+        if args and args[0] in ("--help", "-h"):
+            help_text = _HELP.get(cmd_name)
+            if help_text:
+                print(help_text)
+            else:
+                print(f"No help available for '{cmd_name}'")
+            return
+        
+        handler = _COMMANDS.get(cmd_name)
+        if handler: handler(self, args)
+        else: print(f"Unknown command: {cmd_name}")
 
     def _opts(self, args):
         pos, opts = [], {}
@@ -54,6 +67,53 @@ class CLI:
             else: pos.append(args[i])
             i += 1
         return pos, opts
+    
+    def _find_by_id(self, identifier):
+        """
+        Find a project or task by ID globally across all projects.
+        
+        Args:
+            identifier: Full ID or ID prefix
+            
+        Returns:
+            Tuple of (project, task) or (project, None) for project-only,
+            or (None, None) if not found
+        """
+        projects = self.storage.load_all_projects()
+        
+        # Check if it's a project slug first
+        for p in projects:
+            if p.slug == identifier:
+                return (p, None)
+        
+        # Search for task ID across all projects
+        matches = []
+        for p in projects:
+            for t in p.tasks:
+                if t.id == identifier or t.id.startswith(identifier):
+                    matches.append((p, t))
+        
+        if len(matches) == 0:
+            return (None, None)
+        elif len(matches) == 1:
+            return matches[0]
+        else:
+            # Multiple matches - show options
+            print(f"\nMultiple items match '{identifier}':")
+            for i, (p, t) in enumerate(matches, 1):
+                print(f"  [{i}] {t.title} ({t.id}) in project '{p.name}'")
+            
+            try:
+                choice = input("\nSelect number (or 'c' to cancel): ").strip()
+                if choice.lower() == 'c':
+                    return (None, None)
+                idx = int(choice) - 1
+                if 0 <= idx < len(matches):
+                    return matches[idx]
+            except (ValueError, KeyboardInterrupt):
+                pass
+            
+            return (None, None)
 
 # --- Commands ---
 
@@ -130,21 +190,31 @@ def cmd_list(cli, args):
     if not found: print("No active projects. Use --all.")
 
 def cmd_show(cli, args):
-    if not args: return print("Usage: show <slug> [task_id]")
-    p = cli.storage.load_project(args[0])
-    if not p: return print("Project not found")
+    """Show project or task details. Supports global ID lookup."""
+    if not args: return print("Usage: show <project_slug|task_id>")
     
-    if len(args) > 1:
-        t = next((x for x in p.tasks if x.id.startswith(args[1])), None)
-        if not t: return print("Task not found")
-        print(f"\n{t.title} ({t.id})\nStatus: {t.status.value}\nDue: {t.due_date}\nNotes: {t.notes}")
-    else:
-        print(f"\nProject: {p.name}\n{p.description}")
-        for t in p.tasks:
-            icon = t.status.icon if t.is_active else f"[{t.status.value.upper()}]"
-            # UPDATED: Display due date next to task
-            due = f" [Due: {t.due_date}]" if t.due_date else ""
-            print(f"  {icon} {t.title} ({t.id}){due}")
+    # Try global ID lookup first
+    p, t = cli._find_by_id(args[0])
+    
+    if t:
+        # Found a task
+        print(f"\n{t.title} ({t.id})")
+        print(f"Project: {p.name} ({p.slug})")
+        print(f"Status: {t.status.value}")
+        print(f"Due: {t.due_date or 'Not set'}")
+        print(f"Notes: {t.notes or 'None'}")
+        return
+    
+    if p:
+        # Found a project - show all tasks
+        print(f"\nProject: {p.name}\n{p.description or '(No description)'}")
+        for task in p.tasks:
+            icon = task.status.icon if task.is_active else f"[{task.status.value.upper()}]"
+            due = f" [Due: {task.due_date}]" if task.due_date else ""
+            print(f"  {icon} {task.title} ({task.id}){due}")
+        return
+    
+    print(f"No project or task found matching '{args[0]}'")
 
 def cmd_new(cli, args):
     if len(args) < 2 or args[0] != "project": return print("Usage: new project <slug> <name>")
@@ -181,23 +251,48 @@ def cmd_add(cli, args):
         print("Contact added.")
 
 def cmd_edit(cli, args):
-    if len(args) < 1: return
-    slug = args[0]
+    """Edit a task or project. Supports global ID lookup."""
+    if len(args) < 1: 
+        return print("Usage: edit <project_slug|task_id> [options]\n"
+                    "Options: --due <date>, --note <text>, --s <status>")
+    
+    identifier = args[0]
     pos, opts = cli._opts(args[1:])
     
-    task_id = None
-    if pos: task_id = pos[0]
+    # Try global ID lookup
+    p, t = cli._find_by_id(identifier)
     
-    if task_id:
+    if not p:
+        return print(f"No project or task found matching '{identifier}'")
+    
+    if t:
+        # Editing a task
         updates = {}
-        if "due" in opts or "d" in opts: updates["due_date"] = opts.get("due") or opts.get("d")
-        if "note" in opts: updates["notes"] = opts.get("note")
-        if "s" in opts: updates["status"] = opts.get("s")
-        cli.task_service.update_task(slug, task_id, **updates)
-        print("Task updated.")
+        if "due" in opts or "d" in opts: 
+            updates["due_date"] = opts.get("due") or opts.get("d")
+        if "note" in opts: 
+            updates["notes"] = opts.get("note")
+        if "s" in opts: 
+            updates["status"] = opts.get("s")
+        
+        if not updates:
+            return print("No updates specified. Use --due, --note, or --s")
+        
+        cli.task_service.update_task(p.slug, t.id, **updates)
+        print(f"Task '{t.title}' updated.")
     else:
-        cli.task_service.update_project(slug, name=opts.get("name"), desc=opts.get("desc"))
-        print("Project updated.")
+        # Editing a project
+        updates = {}
+        if "name" in opts:
+            updates["name"] = opts["name"]
+        if "desc" in opts:
+            updates["desc"] = opts["desc"]
+        
+        if not updates:
+            return print("No updates specified. Use --name or --desc")
+        
+        cli.task_service.update_project(p.slug, **updates)
+        print(f"Project '{p.name}' updated.")
 
 def cmd_backup(cli, args):
     pos, opts = cli._opts(args)
@@ -241,7 +336,172 @@ _COMMANDS = {
     "edit": cmd_edit, "delete": cmd_delete,
     "backup": cmd_backup, "restore": cmd_restore, "maintenance": cmd_maintenance, 
     "export": cmd_export, "config": cmd_config,
-    "help": lambda c, a: print("Commands: list, show, new, add, edit, delete, backup, restore, maintenance, export, config")
+    "help": lambda c, a: print(_GENERAL_HELP if not a else _HELP.get(a[0], f"No help for '{a[0]}'"))
+}
+
+_GENERAL_HELP = """
+Smart Scheduler Commands:
+
+  list [--all]              List projects and active tasks
+  show <id>                 Show project or task details (by ID or slug)
+  edit <id> [options]       Edit task or project (by ID or slug)
+  add task <project> <title> [--due <date>] [--note <text>]
+  new project <slug> <name>
+  delete project <slug>
+  
+  backup [--name <n>]       Create backup
+  restore <path>            Restore from backup
+  export <slug> <format>    Export project
+  config [location <path>]  Configure settings
+  
+  help [command]            Show help (use: help <command> for details)
+  quit | exit               Exit scheduler
+
+Use '<command> --help' for command-specific help.
+Examples:
+  edit --help
+  show --help
+"""
+
+_HELP = {
+    "list": """list [--all | -a]
+
+List all projects with their active tasks.
+
+Options:
+  --all, -a    Show all projects, including those with no active tasks
+
+Examples:
+  list
+  list --all""",
+
+    "show": """show <project_slug | task_id>
+
+Show details for a project or task. Accepts project slug or task ID.
+Task IDs work globally - no need to specify the project.
+
+Arguments:
+  project_slug   Project identifier (e.g., 'my_project')
+  task_id        Task ID or ID prefix (e.g., 't30b0a' or just 't30')
+
+Examples:
+  show scheduled_payments     # Show project
+  show t30b0a                 # Show task by ID
+  show t30                    # Show task by ID prefix (interactive if multiple)""",
+
+    "edit": """edit <project_slug | task_id> [OPTIONS]
+
+Edit a project or task. Accepts project slug or task ID.
+Task IDs work globally - no need to specify the project.
+
+Arguments:
+  project_slug | task_id   What to edit
+
+Task Options:
+  --due <date>      Set due date (YYYY-MM-DD format)
+  --note <text>     Set or update notes
+  --s <status>      Set status (todo, in_progress, done, etc.)
+
+Project Options:
+  --name <text>     Change project name
+  --desc <text>     Change project description
+
+Examples:
+  edit t30b0a --note "email from jpatterson @mvccvt.com 2026-02-25"
+  edit t30b0a --due 2026-03-31
+  edit scheduled_payments --desc "Monthly payment tracking"
+  edit t30 --s done""",
+
+    "add": """add task <project_slug> <title> [OPTIONS]
+add contact <project_slug> <name> [OPTIONS]
+
+Add a task or contact to a project.
+
+Task Options:
+  --due <date>      Due date (YYYY-MM-DD)
+  --note <text>     Task notes
+  --g <tags>        Comma-separated tags
+
+Contact Options:
+  --role <text>     Contact's role
+  --note <text>     Notes about contact
+
+Examples:
+  add task scheduled_payments "Pay utility bill" --due 2026-03-15
+  add task my_project "Review document" --note "Check appendix" --due 2026-03-20
+  add contact my_project "John Doe" --role "Project Manager" """,
+
+    "new": """new project <slug> <name>
+
+Create a new project.
+
+Arguments:
+  slug    Project identifier (lowercase, no spaces)
+  name    Project display name
+
+Example:
+  new project budget_2026 "2026 Budget Planning" """,
+
+    "delete": """delete project <slug>
+
+Delete a project and all its tasks (requires confirmation).
+
+Arguments:
+  slug    Project slug to delete
+
+Example:
+  delete project old_project""",
+
+    "export": """export <project_slug> <format> [task_id]
+
+Export project or task data.
+
+Formats:
+  ics      Export single task as iCalendar file (requires task_id)
+  json     Export project as JSON
+  csv      Export project as CSV
+
+Examples:
+  export scheduled_payments ics t30b0a
+  export my_project json
+  export budget_2026 csv""",
+
+    "backup": """backup [--name <name>] [--compress]
+
+Create a backup of all data.
+
+Options:
+  --name <name>    Custom backup name
+  --compress       Create compressed backup
+
+Example:
+  backup --name "before_cleanup" --compress""",
+
+    "restore": """restore <backup_path>
+
+Restore data from a backup file.
+
+Arguments:
+  backup_path    Path to backup file
+
+Example:
+  restore backups/backup_20260217.json""",
+
+    "config": """config [ACTION]
+config location <path>
+config set <key> <value>
+
+View or modify configuration.
+
+Actions:
+  (no args)           Show current configuration
+  location <path>     Move data directory
+  set <key> <value>   Set preference
+
+Examples:
+  config
+  config location ~/Documents/scheduler_data
+  config set storage_engine sqlite"""
 }
 
 def main():
