@@ -1,65 +1,107 @@
 # Smart Scheduler 2.0
 
-A professional, hybrid task management system designed for power users and AI agents. It combines the speed of **SQLite** for indexing with the flexibility of **JSON** for content, wrapped in a robust Python CLI.
+A powerful command-line task and project management system with natural language date parsing, hierarchical project organization, and comprehensive export capabilities.
 
-## 🚀 Features
-
-* **Hybrid Storage**: SQLite for relationships/queries + JSON sidecars for long-form notes.
-* **Agent Ready**: Clean Python API for AI agents to hook into.
-* **Smart Parsing**: Natural language due dates (`tomorrow`, `friday`, `+3`).
-* **Resilient**: Full backup/restore with compression support.
-* **Calendar Integration**: Export tasks to `.ics` for Google Calendar/Outlook.
-* **Portable**: Configurable data directory locations.
-
-## 📦 Installation
-
-This project is structured as a Python package.
+## Quick Start
 
 ```bash
-# 1. Open your terminal in the project root
-# 2. Install in editable mode
-pip install -e .
+# Start the scheduler
+python -m scheduler.cli
+
+# Create a project
+> new project work "Work Tasks"
+
+# Add a task  
+> add task work "Deploy website" --due tomorrow --tags urgent,deploy
+
+# List everything
+> list --all
+
+# Edit a task (no project needed!)
+> edit t30b0a --status in_progress --note "Started deployment"
+
+# Export to JSON
+> export-json work
 ```
 
-⚡ Quick Start
+## Task Status Levels
 
-```Bash
-# 1. Initialize (runs automatically on first command)
-schd config
+| Icon | Status | Meaning |
+|------|--------|---------|
+| ○ | `todo` | Not started / pending |
+| ▶ | `in_progress` | Actively being worked on |
+| ⏳ | `waiting` | Blocked / waiting for something |
+| ✓ | `done` | Completed successfully |
+| ✗ | `cancelled` | Abandoned / no longer needed |
 
-# 2. Create a project
-schd new project garage "Garage Cleanup"
+**Valid status values for `--status` flag:**
+- `todo`
+- `in_progress`
+- `waiting`
+- `done`
+- `cancelled`
 
-# 3. Add tasks
-schd add task garage "Buy shelves" -d friday -g shopping
-schd add task garage "Sort boxes" -d +2
+**Note**: There is NO "confirmed" status. Using `--status confirmed` will cause an error.
 
-# 4. View your schedule
-schd list
-schd show garage
+## Common Commands
+
+### Viewing Data
+```bash
+list                    # Quick project summary
+list --all              # Detailed view (hides completed tasks)
+list --all --show-done  # Show everything including completed
+list tasks              # All tasks across all projects
+show t30b0a             # Full task details
 ```
 
-🛠 Configuration
-
-The system defaults to ~/.scheduler. You can move this anywhere.
-
-```Bash
-# Switch to SQLite engine (Recommended)
-schd config set storage_engine sqlite
-
-# Move data to a cloud folder (Dropbox/Drive)
-# WARNING: This moves your existing data to the new location automatically.
-schd config location "D:/Dropbox/SchedulerData"
-
-📂 Project Structure
-Plaintext
-
-smart-scheduler/
-├── pyproject.toml       # Package definition
-├── src/scheduler/       # Source code
-│   ├── cli.py           # Command Line Interface
-│   ├── models.py        # Data Classes (Task, Project)
-│   ├── services/        # Business Logic (Task, Calendar, Maint)
-│   └── storage/         # Storage Engines (SQLite, JSON)
-└── README.md
+### Creating
+```bash
+new project work "Work Tasks" --desc "Professional projects"
+add task work "Task title" --due tomorrow --tags urgent
 ```
+
+### Editing (No Project Needed!)
+```bash
+edit t30b0a --status in_progress
+edit t30b0a --due "next friday"
+edit t30b0a --note "Updated specs from client"
+edit t30b0a --status done
+```
+
+### Exporting
+```bash
+export-json t30b0a              # Single task
+export-json work                # Entire project  
+export-json --all               # Full database
+export-json --all --output backup.json
+```
+
+### Cleanup
+```bash
+cleanup                         # Preview completed tasks
+cleanup --done --execute        # Delete 'done' tasks
+cleanup --cancelled --execute   # Delete 'cancelled' tasks
+```
+
+## Natural Language Dates
+
+```bash
+--due today
+--due tomorrow
+--due +3                # 3 days from now
+--due monday            # Next Monday
+--due "next friday"
+--due "in 2 weeks"
+--due "march 15"
+--due "2026-12-25"     # ISO format still works
+```
+
+## Getting Help
+
+```bash
+help                # Full command reference
+help edit           # Command-specific help
+help cleanup        # See cleanup options
+```
+
+For complete documentation, see [Full Documentation](FULL_README.md)

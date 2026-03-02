@@ -1,7 +1,12 @@
 """
-services/task_service.py
+services/task_service.py - ENHANCED with Global ID Lookup
+
+New features:
+1. find_task_by_id() - Find any task by ID across all projects
+2. find_contact_by_id() - Find any contact by ID across all projects  
+3. delete_task_by_id() - Delete task by ID without needing project
 """
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime, timedelta
 import re
 from uuid import uuid4
@@ -51,6 +56,69 @@ def parse_date(date_str: Optional[str]) -> Optional[str]:
 class TaskService:
     def __init__(self, storage: StorageStrategy):
         self.storage = storage
+
+    # ========================================================================
+    # GLOBAL ID LOOKUP - NEW METHODS
+    # ========================================================================
+    
+    def find_task_by_id(self, task_id: str) -> Optional[Tuple[Project, Task]]:
+        """Find a task by ID across ALL projects.
+        
+        Returns:
+            Tuple of (Project, Task) if found, None otherwise
+        """
+        # Search all projects for this task ID
+        for project in self.storage.load_all_projects():
+            for task in project.tasks:
+                if task.id == task_id or task.id.startswith(task_id):
+                    return (project, task)
+        return None
+    
+    def find_contact_by_id(self, contact_id: str) -> Optional[Tuple[Project, Contact]]:
+        """Find a contact by ID across ALL projects.
+        
+        Returns:
+            Tuple of (Project, Contact) if found, None otherwise
+        """
+        for project in self.storage.load_all_projects():
+            for contact in project.contacts:
+                if contact.id == contact_id or contact.id.startswith(contact_id):
+                    return (project, contact)
+        return None
+    
+    def delete_task_by_id(self, task_id: str) -> bool:
+        """Delete a task by ID without needing to know its project.
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        result = self.find_task_by_id(task_id)
+        if not result:
+            return False
+        
+        project, task = result
+        project.tasks = [t for t in project.tasks if t.id != task.id]
+        self.storage.save_project(project)
+        return True
+    
+    def delete_contact_by_id(self, contact_id: str) -> bool:
+        """Delete a contact by ID without needing to know its project.
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        result = self.find_contact_by_id(contact_id)
+        if not result:
+            return False
+        
+        project, contact = result
+        project.contacts = [c for c in project.contacts if c.id != contact.id]
+        self.storage.save_project(project)
+        return True
+
+    # ========================================================================
+    # EXISTING METHODS (unchanged)
+    # ========================================================================
 
     def get_summary(self) -> dict:
         projects = self.storage.load_all_projects()
